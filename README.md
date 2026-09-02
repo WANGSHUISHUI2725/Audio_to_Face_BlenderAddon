@@ -58,4 +58,3 @@ NVIDIA Audio2Face 3D SDK. See `THIRD_PARTY_LICENSES/NVIDIA-Audio2Face-3D-SDK-LIC
 No license has yet been assigned to the original add-on and exporter code. Before making
 this repository public as an open-source project, choose and add an appropriate project
 license.
-
