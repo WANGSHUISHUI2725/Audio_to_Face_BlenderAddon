@@ -1,0 +1,28 @@
+# Local NVIDIA and model dependencies
+CUDA/
+TensorRT/
+HF_Cache/
+Python310/
+Audio2Face-3D-SDK/_data/
+Audio2Face-3D-SDK/_deps/
+Audio2Face-3D-SDK/build/
+
+# Local build and generated output
+Engine/build/
+BlenderAddon/generated_json/
+**/__pycache__/
+*.pyc
+
+# Large model and inference artifacts
+*.npz
+*.onnx
+*.trt
+
+# Local-only projects and caches
+CMake/
+MayaACE/
+Models/
+UE-and-MayaACE/
+test/
+link plugin/
+_remote_check/
