@@ -51,9 +51,14 @@ class A2FPreferences(AddonPreferences):
         default=str(_defaults()["exporter"]),
     )
     model_path: StringProperty(
-        name="Model",
+        name="v2.3 Model",
         subtype="FILE_PATH",
         default=str(_defaults()["model"]),
+    )
+    diffusion_model_path: StringProperty(
+        name="v3.0 Model",
+        subtype="FILE_PATH",
+        default=str(_defaults()["diffusion_model"]),
     )
     model_mode: EnumProperty(
         name="A2F Model",
@@ -93,6 +98,7 @@ class A2FPreferences(AddonPreferences):
         layout = self.layout
         layout.prop(self, "exporter_path")
         layout.prop(self, "model_path")
+        layout.prop(self, "diffusion_model_path")
         layout.prop(self, "model_mode", expand=True)
         if self.model_mode != "REGRESSION":
             layout.prop(self, "diffusion_identity", expand=True)
@@ -386,7 +392,16 @@ class A2F_OT_generate(Operator):
             return {"CANCELLED"}
 
         exporter = Path(bpy.path.abspath(prefs.exporter_path))
-        model = Path(bpy.path.abspath(prefs.model_path))
+        regression_model = Path(bpy.path.abspath(prefs.model_path))
+        diffusion_model = Path(bpy.path.abspath(prefs.diffusion_model_path))
+        if prefs.model_mode == "DIFFUSION":
+            model = diffusion_model
+        elif prefs.model_mode == "REGRESSION":
+            model = regression_model
+        elif regression_model.is_file():
+            model = regression_model
+        else:
+            model = diffusion_model
         audio = Path(bpy.path.abspath(settings.audio_path))
         for label, path in (("Exporter", exporter), ("Model", model), ("Audio", audio)):
             if not path.is_file():

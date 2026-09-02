@@ -25,7 +25,8 @@ package. Using these exact versions is recommended before trying newer releases.
 | NVIDIA GPU driver | A current driver compatible with CUDA 12.9 | NVIDIA driver with CUDA 12.9 support | [NVIDIA Driver Downloads](https://www.nvidia.com/Download/index.aspx) |
 | CUDA Toolkit | **12.9.2** | `>= 12.8, < 13.0` | [CUDA Toolkit Archive](https://developer.nvidia.com/cuda-toolkit-archive) |
 | TensorRT | **10.13.3.9** | `>= 10.13, < 11.0` | [TensorRT Downloads](https://developer.nvidia.com/tensorrt/download/10x) |
-| A2F model | **Audio2Face-3D-v2.3-Mark** | Model compatible with the NVIDIA Audio2Face 3D SDK | [NVIDIA model on Hugging Face](https://huggingface.co/nvidia/Audio2Face-3D-v2.3-Mark) |
+| A2F model (v2) | **Audio2Face-3D-v2.3-Mark** | Model compatible with the NVIDIA Audio2Face 3D SDK | [NVIDIA model on Hugging Face](https://huggingface.co/nvidia/Audio2Face-3D-v2.3-Mark) |
+| A2F model (v3) | **Audio2Face-3D-v3.0** | Model compatible with the NVIDIA Audio2Face 3D SDK | [NVIDIA model on Hugging Face](https://huggingface.co/nvidia/Audio2Face-3D-v3.0) |
 | Audio2Face SDK | Current NVIDIA Audio2Face-3D-SDK used by this project | CUDA/TensorRT-compatible SDK build | [Audio2Face-3D-SDK on GitHub](https://github.com/NVIDIA/Audio2Face-3D-SDK) |
 
 An NVIDIA GPU is required; the current exporter does not provide a CPU inference mode.
@@ -37,6 +38,11 @@ add-on preferences, select:
 - the model directory's `model.json`;
 - the CUDA Toolkit root directory (the directory containing `bin`);
 - the TensorRT root directory (the directory containing `lib`).
+
+The v3.0 model package may provide `network.onnx` but not a prebuilt `network.trt`. In that
+case, run the NVIDIA SDK model/test-data generation step to build the TensorRT engine, or use
+the generated `multi-diffusion/network.trt` produced by the SDK when it matches the v3.0
+model files. Place the resulting `network.trt` beside v3.0's `model.json`.
 
 See [`BlenderAddon/README.md`](BlenderAddon/README.md) for installation and usage details.
 

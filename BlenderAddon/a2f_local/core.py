@@ -158,6 +158,12 @@ def default_workspace_paths(addon_file):
         / "data"
         / "mark"
         / "model.json",
+        "diffusion_model": workspace
+        / "Audio2Face-3D-SDK"
+        / "_data"
+        / "audio2face-models"
+        / "audio2face-3d-v3.0"
+        / "model.json",
         "cuda": workspace / "CUDA" / "v12.9",
         "tensorrt": workspace / "TensorRT" / "TensorRT-10.13.3.9",
         "json_output": workspace / "BlenderAddon" / "generated_json",
