@@ -9,6 +9,7 @@ Audio2Face-3D-SDK/build/
 
 # Local build and generated output
 Engine/build/
+Engine/build-cache-old/
 BlenderAddon/generated_json/
 **/__pycache__/
 *.pyc
@@ -25,4 +26,5 @@ Models/
 UE-and-MayaACE/
 test/
 link plugin/
+vs_community.exe
 _remote_check/
