@@ -32,6 +32,8 @@ constexpr std::size_t kSampleRate = 16000;
 constexpr std::size_t kFrameRate = 60;
 constexpr double kDefaultMaxDurationSeconds = 60.0;
 
+enum class ModelType { Regression, Diffusion };
+
 std::string pathUtf8(const fs::path& path) { return path.u8string(); }
 
 std::string jsonEscape(const std::wstring& value) {
@@ -322,10 +324,18 @@ void onFrame(void* userdata, const nva2f::IBlendshapeExecutor::HostResults& resu
   state.frames.emplace_back(std::move(frame));
 }
 
-std::vector<Frame> infer(const fs::path& modelPath, const std::vector<float>& audio) {
-  auto bundle = sdkPtr(nva2f::ReadRegressionBlendshapeSolveExecutorBundle(
-      1, pathUtf8(modelPath).c_str(), nva2f::IGeometryExecutor::ExecutionOption::Skin,
-      false, kFrameRate, 1, nullptr, nullptr));
+std::vector<Frame> infer(const fs::path& modelPath, const std::vector<float>& audio,
+                         ModelType modelType, std::size_t identityIndex) {
+  SdkPtr<nva2f::IBlendshapeExecutorBundle> bundle;
+  if (modelType == ModelType::Diffusion) {
+    bundle = sdkPtr(nva2f::ReadDiffusionBlendshapeSolveExecutorBundle(
+        1, pathUtf8(modelPath).c_str(), nva2f::IGeometryExecutor::ExecutionOption::Skin,
+        false, identityIndex, true, nullptr, nullptr));
+  } else {
+    bundle = sdkPtr(nva2f::ReadRegressionBlendshapeSolveExecutorBundle(
+        1, pathUtf8(modelPath).c_str(), nva2f::IGeometryExecutor::ExecutionOption::Skin,
+        false, kFrameRate, 1, nullptr, nullptr));
+  }
   if (!bundle) {
     throw std::runtime_error("Unable to load Audio2Face blendshape model: " + pathUtf8(modelPath));
   }
@@ -411,7 +421,8 @@ void writeJson(const fs::path& output, const fs::path& audioPath,
 
 void printUsage() {
   std::cerr << "Usage: a2f_blender_exporter --model <model.json> --audio <input audio> "
-               "--output <animation.json> [--max-duration <seconds>]\n";
+               "--output <animation.json> --model-type <regression|diffusion> "
+               "[--identity <0|1|2>] [--max-duration <seconds>]\n";
 }
 
 }  // namespace
@@ -421,15 +432,24 @@ int wmain(int argc, wchar_t** argv) {
     fs::path model;
     fs::path audio;
     fs::path output;
+    ModelType modelType = ModelType::Regression;
+    std::size_t identityIndex = 2;
     double maxDurationSeconds = kDefaultMaxDurationSeconds;
     for (int i = 1; i < argc; ++i) {
       const std::wstring arg = argv[i];
       if ((arg == L"--model" || arg == L"--audio" || arg == L"--output" ||
+           arg == L"--model-type" || arg == L"--identity" ||
            arg == L"--max-duration") && i + 1 < argc) {
         const fs::path value = argv[++i];
         if (arg == L"--model") model = value;
         if (arg == L"--audio") audio = value;
         if (arg == L"--output") output = value;
+        if (arg == L"--model-type") {
+          if (value == L"regression") modelType = ModelType::Regression;
+          else if (value == L"diffusion") modelType = ModelType::Diffusion;
+          else throw std::runtime_error("Model type must be regression or diffusion");
+        }
+        if (arg == L"--identity") identityIndex = std::stoul(value.wstring());
         if (arg == L"--max-duration") maxDurationSeconds = std::stod(value.wstring());
       } else if (arg == L"--help" || arg == L"-h") {
         printUsage();
@@ -445,6 +465,7 @@ int wmain(int argc, wchar_t** argv) {
     if (!fs::is_regular_file(model)) throw std::runtime_error("Model file does not exist");
     if (!fs::is_regular_file(audio)) throw std::runtime_error("Audio file does not exist");
     if (maxDurationSeconds <= 0.0) throw std::runtime_error("Maximum duration must be positive");
+    if (identityIndex > 2) throw std::runtime_error("Diffusion identity must be 0, 1, or 2");
     if (!output.parent_path().empty()) fs::create_directories(output.parent_path());
 
     check(nva2x::SetCudaDeviceIfNeeded(0), "Select CUDA device");
@@ -456,7 +477,7 @@ int wmain(int argc, wchar_t** argv) {
                                std::to_string(maxDurationSeconds) + " seconds");
     }
     std::cout << "Loaded " << samples.size() << " mono samples at " << kSampleRate << " Hz\n";
-    const auto frames = infer(model, samples);
+    const auto frames = infer(model, samples, modelType, identityIndex);
     writeJson(output, audio, frames);
     std::cout << "Wrote " << frames.size() << " frames and " << kArkitChannels.size()
               << " channels to " << pathUtf8(output) << "\n";

@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Audio2Face Local",
     "author": "WangShuishui",
-    "version": (0, 3, 1),
+    "version": (0, 4, 0),
     "blender": (4, 0, 0),
     "location": "3D View > Sidebar > Audio2Face",
     "description": "Generate local Audio2Face facial animation for Faceit or Shape Keys",
@@ -27,6 +27,7 @@ from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup
 from .core import (
     create_json_output_paths,
     default_workspace_paths,
+    resolve_model_mode,
     load_animation,
     match_channels,
     write_faceit_animation,
@@ -54,6 +55,24 @@ class A2FPreferences(AddonPreferences):
         subtype="FILE_PATH",
         default=str(_defaults()["model"]),
     )
+    model_mode: EnumProperty(
+        name="A2F Model",
+        items=(
+            ("AUTO", "Auto Detect", "Detect Regression or Diffusion from model.json"),
+            ("REGRESSION", "v2.3 Regression", "Use the Audio2Face-3D v2.3 regression model"),
+            ("DIFFUSION", "v3.0 Diffusion", "Use the Audio2Face-3D v3.0 diffusion model"),
+        ),
+        default="AUTO",
+    )
+    diffusion_identity: EnumProperty(
+        name="v3 Identity",
+        items=(
+            ("0", "Claire", "Use the Claire identity included with v3.0"),
+            ("1", "James", "Use the James identity included with v3.0"),
+            ("2", "Mark", "Use the Mark identity included with v3.0"),
+        ),
+        default="2",
+    )
     cuda_path: StringProperty(
         name="CUDA",
         subtype="DIR_PATH",
@@ -74,6 +93,9 @@ class A2FPreferences(AddonPreferences):
         layout = self.layout
         layout.prop(self, "exporter_path")
         layout.prop(self, "model_path")
+        layout.prop(self, "model_mode", expand=True)
+        if self.model_mode != "REGRESSION":
+            layout.prop(self, "diffusion_identity", expand=True)
         layout.prop(self, "cuda_path")
         layout.prop(self, "tensorrt_path")
         layout.prop(self, "json_output_path")
@@ -370,6 +392,11 @@ class A2F_OT_generate(Operator):
             if not path.is_file():
                 self.report({"ERROR"}, f"{label} file not found: {path}")
                 return {"CANCELLED"}
+        try:
+            model_mode = resolve_model_mode(model, prefs.model_mode)
+        except ValueError as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
         if (
             settings.generation_mode == "ANIMATION"
             and settings.output_mode == "DIRECT"
@@ -410,6 +437,10 @@ class A2F_OT_generate(Operator):
             "--output", str(self._output_path),
             "--max-duration", str(settings.max_duration_seconds),
         ]
+        # Keep the packaged v2 exporter backward-compatible; the v3 argument is
+        # added only when the diffusion-capable exporter is being used.
+        if model_mode == "DIFFUSION":
+            command.extend(["--model-type", "diffusion", "--identity", prefs.diffusion_identity])
         try:
             self._process = subprocess.Popen(
                 command,
@@ -491,7 +522,12 @@ class A2F_PT_panel(Panel):
     def draw(self, context):
         layout = self.layout
         settings = context.scene.a2f_local
+        prefs = _preferences(context)
         layout.prop(settings, "audio_path")
+        if prefs is not None:
+            layout.prop(prefs, "model_mode", expand=True)
+            if prefs.model_mode != "REGRESSION":
+                layout.prop(prefs, "diffusion_identity", expand=True)
         layout.prop(settings, "generation_mode", expand=True)
         if settings.generation_mode == "ANIMATION":
             layout.prop(settings, "output_mode", expand=True)

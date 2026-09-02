@@ -14,9 +14,37 @@ match_channels = CORE.match_channels
 normalize_name = CORE.normalize_name
 write_faceit_animation = CORE.write_faceit_animation
 create_json_output_paths = CORE.create_json_output_paths
+detect_model_mode = CORE.detect_model_mode
+resolve_model_mode = CORE.resolve_model_mode
 
 
 class CoreTests(unittest.TestCase):
+    def test_detects_regression_and_diffusion_models(self):
+        with tempfile.TemporaryDirectory() as directory:
+            regression = Path(directory) / "regression.json"
+            diffusion = Path(directory) / "diffusion.json"
+            regression.write_text(
+                json.dumps({"modelConfigPath": "config.json", "modelDataPath": "data.npz"}),
+                encoding="utf-8",
+            )
+            diffusion.write_text(
+                json.dumps({"modelConfigPaths": ["config.json"], "modelDataPaths": ["data.npz"]}),
+                encoding="utf-8",
+            )
+            self.assertEqual(detect_model_mode(regression), "REGRESSION")
+            self.assertEqual(detect_model_mode(diffusion), "DIFFUSION")
+            self.assertEqual(resolve_model_mode(diffusion, "AUTO"), "DIFFUSION")
+
+    def test_rejects_model_mode_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "model.json"
+            model.write_text(
+                json.dumps({"modelConfigPath": "config.json", "modelDataPath": "data.npz"}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                resolve_model_mode(model, "DIFFUSION")
+
     def test_normalize_name(self):
         self.assertEqual(normalize_name("Mouth_Smile.Left"), "mouthsmileleft")
 

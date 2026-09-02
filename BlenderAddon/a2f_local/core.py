@@ -5,6 +5,45 @@ from datetime import datetime
 from pathlib import Path
 
 
+MODEL_MODE_AUTO = "AUTO"
+MODEL_MODE_REGRESSION = "REGRESSION"
+MODEL_MODE_DIFFUSION = "DIFFUSION"
+
+
+def detect_model_mode(model_path):
+    """Return the A2F executor type described by a model.json file."""
+    try:
+        with Path(model_path).open("r", encoding="utf-8") as stream:
+            model = json.load(stream)
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"Could not read A2F model configuration: {error}") from error
+    if not isinstance(model, dict):
+        raise ValueError("A2F model configuration must be a JSON object")
+    if isinstance(model.get("modelConfigPaths"), list) and isinstance(
+        model.get("modelDataPaths"), list
+    ):
+        return MODEL_MODE_DIFFUSION
+    if isinstance(model.get("modelConfigPath"), str) and isinstance(
+        model.get("modelDataPath"), str
+    ):
+        return MODEL_MODE_REGRESSION
+    raise ValueError("Unrecognized A2F model configuration")
+
+
+def resolve_model_mode(model_path, requested_mode):
+    detected = detect_model_mode(model_path)
+    if requested_mode == MODEL_MODE_AUTO:
+        return detected
+    if requested_mode not in (MODEL_MODE_REGRESSION, MODEL_MODE_DIFFUSION):
+        raise ValueError(f"Unknown A2F model mode: {requested_mode}")
+    if requested_mode != detected:
+        raise ValueError(
+            f"Selected {requested_mode.title()} mode does not match the model.json "
+            f"detected as {detected.title()}"
+        )
+    return requested_mode
+
+
 SCHEMA = "a2f-blendshapes-v1"
 
 # Faceit 2.3.73 reads weightMat by position and uses this internal order, which
