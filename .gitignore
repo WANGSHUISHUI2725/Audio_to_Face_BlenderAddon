@@ -1,0 +1,31 @@
+# Local SDKs and development runtimes
+/Audio2Face-3D-SDK/
+/CUDA/
+/TensorRT/
+/Python310/
+/CMake/
+/HF_Cache/
+/Models/
+
+# Third-party reference plug-ins and downloaded packages
+/UE-and-MayaACE/
+/MayaACE/
+/link plugin/
+/test/
+
+# Build output and generated user data
+/Engine/build/
+/Engine/*.json
+/BlenderAddon/generated_json/*.json
+/BlenderAddon/a2f_local/__pycache__/
+/BlenderAddon/tests/__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Editor and OS metadata
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
