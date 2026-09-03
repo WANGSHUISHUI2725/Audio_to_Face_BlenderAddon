@@ -46,6 +46,21 @@ model files. Place the resulting `network.trt` beside v3.0's `model.json`.
 
 See [`BlenderAddon/README.md`](BlenderAddon/README.md) for installation and usage details.
 
+## GPU compatibility risk notice
+
+The versions listed above describe the current test environment; they do not guarantee
+support for every NVIDIA GPU. As a practical starting point, RTX 20-series and newer
+cards are the target range, while RTX 30-series and newer cards with at least 12 GB of
+VRAM are recommended for the v3.0 model. RTX 20-series/Turing cards may work but require
+additional testing. GTX 16-series, GTX 10-series, and older cards are not recommended.
+
+Compatibility depends on the GPU's Compute Capability, available VRAM, NVIDIA driver,
+CUDA Runtime, TensorRT version, and the model being used. A TensorRT engine such as
+`network.trt` may not be portable between GPU architectures or different TensorRT builds;
+it may need to be regenerated on the target machine. A newer GPU can therefore still fail
+if the driver, CUDA/TensorRT versions, or generated engine do not match. The project will
+publish a tested GPU matrix as more hardware is verified.
+
 ## Known issues
 
 1. **Eye movement and blinking**: Eye controls and blinking are not yet driven reliably.
@@ -58,6 +73,14 @@ See [`BlenderAddon/README.md`](BlenderAddon/README.md) for installation and usag
 3. **Missing TensorRT files**: The add-on preferences should provide a validation button that
    checks whether referenced files such as `network.trt` exist. We also need to investigate
    whether users without a development environment can generate the TensorRT engine locally.
+4. **Direct animation generation overwrites the previous animation**: Generating animation
+   directly currently replaces the previous result. The planned UI change is to offer
+   explicit **Keep** and **Overwrite** choices, allowing users to preserve the existing
+   animation or create a new animation instead.
+5. **Audio accumulates after repeated imports**: Importing animation also imports its audio
+   file. A second import currently leaves the first audio strip in place, so playback can
+   play multiple audio files at the same time. The planned fix is to automatically mute the
+   track containing the previously imported audio when a new import is performed.
 
 ## Development roadmap
 
