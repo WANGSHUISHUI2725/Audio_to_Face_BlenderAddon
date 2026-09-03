@@ -17,9 +17,40 @@ create_json_output_paths = CORE.create_json_output_paths
 detect_model_mode = CORE.detect_model_mode
 resolve_model_mode = CORE.resolve_model_mode
 resolve_runtime_model = CORE.resolve_runtime_model
+clamp_lips_closed_action = CORE.clamp_lips_closed_action
+
+
+class FakeKeyframe:
+    def __init__(self, value):
+        self.co = [0.0, value]
+
+
+class FakeCurve:
+    def __init__(self, path, values):
+        self.data_path = path
+        self.keyframe_points = [FakeKeyframe(value) for value in values]
+
+    def update(self):
+        pass
+
+
+class FakeAction:
+    def __init__(self, curves):
+        self.fcurves = curves
 
 
 class CoreTests(unittest.TestCase):
+    def test_clamps_lips_closed_controller_only(self):
+        action = FakeAction(
+            [
+                FakeCurve('pose.bones["c_lips_closed"].location', [-1.0, 0.25, 2.0]),
+                FakeCurve('pose.bones["jawOpen"].location', [2.0]),
+            ]
+        )
+        self.assertEqual(clamp_lips_closed_action(action, 0.5), 2)
+        self.assertEqual([key.co[1] for key in action.fcurves[0].keyframe_points], [0.0, 0.25, 0.5])
+        self.assertEqual(action.fcurves[1].keyframe_points[0].co[1], 2.0)
+
     def test_detects_regression_and_diffusion_models(self):
         with tempfile.TemporaryDirectory() as directory:
             regression = Path(directory) / "regression.json"

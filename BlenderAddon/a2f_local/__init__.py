@@ -29,6 +29,7 @@ from .core import (
     default_workspace_paths,
     resolve_runtime_model,
     resolve_model_mode,
+    clamp_lips_closed_action,
     load_animation,
     match_channels,
     write_faceit_animation,
@@ -94,6 +95,13 @@ class A2FPreferences(AddonPreferences):
         subtype="DIR_PATH",
         default=str(_defaults()["json_output"]),
     )
+    lips_closed_max: FloatProperty(
+        name="v3 Lips Closed Max",
+        default=0.5,
+        min=0.0,
+        max=1.0,
+        description="Limit Faceit's c_lips_closed controller when using v3 Diffusion",
+    )
 
     def draw(self, _context):
         layout = self.layout
@@ -103,6 +111,7 @@ class A2FPreferences(AddonPreferences):
         layout.prop(self, "model_mode", expand=True)
         if self.model_mode != "REGRESSION":
             layout.prop(self, "diffusion_identity", expand=True)
+            layout.prop(self, "lips_closed_max")
         layout.prop(self, "cuda_path")
         layout.prop(self, "tensorrt_path")
         layout.prop(self, "json_output_path")
@@ -111,6 +120,25 @@ class A2FPreferences(AddonPreferences):
 class A2FSettings(PropertyGroup):
     audio_path: StringProperty(name="Audio", subtype="FILE_PATH")
     last_json_path: StringProperty(name="Last Faceit JSON", subtype="FILE_PATH")
+    last_audio_path: StringProperty(name="Last Imported Audio", subtype="FILE_PATH")
+    delete_previous_audio: BoolProperty(
+        name="Delete Previous Audio",
+        default=False,
+        description="Remove the audio strip imported by the previous generation",
+    )
+    mute_previous_audio: BoolProperty(
+        name="Mute Previous Audio",
+        default=True,
+        description="Mute the audio strip imported by the previous generation",
+    )
+    animation_handling: EnumProperty(
+        name="Animation",
+        items=(
+            ("REPLACE", "Overwrite Current Animation", "Replace the active facial animation"),
+            ("NEW", "New Facial Animation", "Create a separate facial animation action"),
+        ),
+        default="REPLACE",
+    )
     generation_mode: EnumProperty(
         name="Output",
         items=(
@@ -220,6 +248,24 @@ def _finalize_fcurves(action):
         curve.update()
 
 
+def _handle_previous_audio(context, settings):
+    previous = str(getattr(settings, "last_audio_path", "") or "")
+    if not previous:
+        return
+    sequence_editor = getattr(context.scene, "sequence_editor", None)
+    if sequence_editor is None:
+        return
+    for strip in list(getattr(sequence_editor, "sequences_all", ())):
+        sound = getattr(strip, "sound", None)
+        filepath = getattr(sound, "filepath", "") if sound is not None else ""
+        if filepath != previous and str(getattr(strip, "filepath", "") or "") != previous:
+            continue
+        if settings.delete_previous_audio:
+            sequence_editor.sequences.remove(strip)
+        elif settings.mute_previous_audio:
+            strip.mute = True
+
+
 def _run_faceit_import(**properties):
     operator_class = None
     for module in tuple(sys.modules.values()):
@@ -261,7 +307,12 @@ def _apply_animation(context, json_path):
 
     shape_keys.animation_data_create()
     action_name = f"A2F_{Path(animation.get('source', 'Audio')).stem}"
-    action = bpy.data.actions.new(action_name)
+    if settings.animation_handling == "REPLACE" and shape_keys.animation_data.action is not None:
+        action = shape_keys.animation_data.action
+        action.name = action_name
+        action.fcurves.clear()
+    else:
+        action = bpy.data.actions.new(action_name)
     shape_keys.animation_data.action = action
 
     scene_fps = context.scene.render.fps / context.scene.render.fps_base
@@ -301,6 +352,7 @@ def _apply_animation(context, json_path):
 
 def _apply_with_faceit(context, faceit_json_path, audio_path):
     settings = context.scene.a2f_local
+    prefs = _preferences(context)
     rig = _activate_faceit_control_rig(context)
     engine_collection = getattr(context.scene, "faceit_live_mocap_settings", None)
     if engine_collection is None:
@@ -320,7 +372,7 @@ def _apply_with_faceit(context, faceit_json_path, audio_path):
         record_frame_rate=60.0,
         animate_shapes=True,
         bake_to_control_rig=settings.bake_to_control_rig,
-        overwrite_method="REPLACE",
+        overwrite_method="REPLACE" if settings.animation_handling == "REPLACE" else "ADD",
         set_scene_frame_range=True,
         load_audio_file=True,
         new_action_name=action_name,
@@ -328,6 +380,11 @@ def _apply_with_faceit(context, faceit_json_path, audio_path):
     if "FINISHED" not in result:
         raise ValueError("Faceit cancelled the ARKit mocap import")
     _finalize_fcurves(getattr(getattr(rig, "animation_data", None), "action", None))
+    if prefs is not None and prefs.model_mode != "REGRESSION":
+        clamp_lips_closed_action(
+            getattr(getattr(rig, "animation_data", None), "action", None),
+            prefs.lips_closed_max,
+        )
     animation = load_animation(faceit_json_path)
     return len(animation["channels"]), len(animation["frames"]), action_name
 
@@ -408,6 +465,7 @@ class A2F_OT_generate(Operator):
             selected_model = diffusion_model
             generated_model = Path(_defaults()["generated_diffusion_model"])
         audio = Path(bpy.path.abspath(settings.audio_path))
+        _handle_previous_audio(context, settings)
         for label, path in (("Exporter", exporter), ("Audio", audio)):
             if not path.is_file():
                 self.report({"ERROR"}, f"{label} file not found: {path}")
@@ -512,6 +570,7 @@ class A2F_OT_generate(Operator):
                 )
             else:
                 channel_count, frame_count, action_name = _apply_animation(context, self._output_path)
+            settings.last_audio_path = str(self._audio_path)
         except Exception as error:
             self.report({"ERROR"}, f"Could not apply animation: {error}")
             return {"CANCELLED"}
@@ -545,12 +604,15 @@ class A2F_PT_panel(Panel):
         settings = context.scene.a2f_local
         prefs = _preferences(context)
         layout.prop(settings, "audio_path")
+        layout.prop(settings, "delete_previous_audio")
+        layout.prop(settings, "mute_previous_audio")
         if prefs is not None:
             layout.prop(prefs, "model_mode", expand=True)
             if prefs.model_mode != "REGRESSION":
                 layout.prop(prefs, "diffusion_identity", expand=True)
         layout.prop(settings, "generation_mode", expand=True)
         if settings.generation_mode == "ANIMATION":
+            layout.prop(settings, "animation_handling", expand=True)
             layout.prop(settings, "output_mode", expand=True)
             if settings.output_mode == "FACEIT":
                 layout.prop(settings, "faceit_control_rig")

@@ -13,6 +13,12 @@ WangShuishui.
    `audio2x.dll` are included in the ZIP; CUDA, TensorRT, and the model are downloaded
    separately from NVIDIA's official channels.
 
+The Audio2Face panel provides separate controls for v2.3 Regression and v3.0 Diffusion.
+For v3.0, the selected Faceit identity and `c_lips_closed` limit are applied after import;
+the default limit is 0.5 to reduce lip interpenetration. Under the audio field, enable
+either deletion or muting of the previous imported audio strip. For direct Shape Key
+animation, choose whether to overwrite the current action or create a new facial action.
+
 ## Use
 
 Open **3D View > Sidebar > Audio2Face**, choose a common audio file (WAV, MP3, M4A/AAC,

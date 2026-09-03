@@ -80,6 +80,25 @@ def resolve_runtime_model(model_path, generated_model_path=None):
     raise ValueError(errors[-1] if errors else "No Audio2Face model path was provided")
 
 
+def clamp_lips_closed_action(action, maximum=0.5):
+    """Limit Faceit's c_lips_closed controller curves to avoid lip interpenetration."""
+    if action is None:
+        return 0
+    changed = 0
+    for curve in getattr(action, "fcurves", ()):
+        path = str(getattr(curve, "data_path", "")).lower()
+        if "c_lips_closed" not in path:
+            continue
+        for keyframe in getattr(curve, "keyframe_points", ()):
+            value = keyframe.co[1]
+            limited = min(float(maximum), max(0.0, float(value)))
+            if value != limited:
+                keyframe.co[1] = limited
+                changed += 1
+        curve.update()
+    return changed
+
+
 SCHEMA = "a2f-blendshapes-v1"
 
 # Faceit 2.3.73 reads weightMat by position and uses this internal order, which
@@ -197,11 +216,8 @@ def default_workspace_paths(addon_file):
         "diffusion_model": workspace
         / "Audio2Face-3D-SDK"
         / "_data"
-        / "generated"
-        / "audio2face-sdk"
-        / "samples"
-        / "data"
-        / "multi-diffusion"
+        / "audio2face-models"
+        / "audio2face-3d-v3.0"
         / "model.json",
         "generated_regression_model": workspace
         / "Audio2Face-3D-SDK"
