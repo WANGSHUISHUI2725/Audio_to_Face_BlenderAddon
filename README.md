@@ -46,6 +46,26 @@ model files. Place the resulting `network.trt` beside v3.0's `model.json`.
 
 See [`BlenderAddon/README.md`](BlenderAddon/README.md) for installation and usage details.
 
+## Known issues
+
+1. **Eye movement and blinking**: Eye controls and blinking are not yet driven reliably.
+   The next iteration should add an optimization algorithm. If no suitable open-source
+   solution is available, noise-based jitter and fixed-frequency blinking will be evaluated
+   as fallback approaches.
+2. **v3.0 lip intersection**: The v3.0 model can cause the upper and lower lips to intersect.
+   The initial diagnosis is that the `jawOpen` Shape Key value can leave the `[0, 1]` range
+   and become negative. A later fix will attempt to clamp `jawOpen` values to `[0, 1]`.
+3. **Missing TensorRT files**: The add-on preferences should provide a validation button that
+   checks whether referenced files such as `network.trt` exist. We also need to investigate
+   whether users without a development environment can generate the TensorRT engine locally.
+
+## Development roadmap
+
+1. Add support for MetaHuman Shape Keys.
+2. Add sliders for controlling blinking frequency and eye-jitter frequency.
+3. Expand GPU compatibility: infer candidate GPU models from the installed driver, CUDA,
+   and TensorRT versions, then test and document support across additional GPU models.
+
 ## License
 
 Project code is released under the MIT License. NVIDIA Audio2Face SDK, model, CUDA, and
