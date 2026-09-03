@@ -44,6 +44,42 @@ def resolve_model_mode(model_path, requested_mode):
     return requested_mode
 
 
+def validate_runtime_model(model_path):
+    """Validate that a model configuration has its generated TensorRT network."""
+    model_path = Path(model_path)
+    try:
+        with model_path.open("r", encoding="utf-8") as stream:
+            model = json.load(stream)
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"Could not read A2F model configuration: {error}") from error
+    network_path = model.get("networkPath") if isinstance(model, dict) else None
+    if not isinstance(network_path, str) or not network_path:
+        raise ValueError("A2F model configuration has no networkPath")
+    network = model_path.parent / network_path
+    if not network.is_file():
+        raise ValueError(
+            f"Generated TensorRT model not found: {network}. Run the Audio2Face SDK "
+            "test-data generation step, then select its generated model.json."
+        )
+    return model_path
+
+
+def resolve_runtime_model(model_path, generated_model_path=None):
+    """Prefer the selected model, falling back to a generated SDK model when needed."""
+    candidates = [Path(model_path)]
+    if generated_model_path is not None:
+        fallback = Path(generated_model_path)
+        if fallback not in candidates:
+            candidates.append(fallback)
+    errors = []
+    for candidate in candidates:
+        try:
+            return validate_runtime_model(candidate)
+        except ValueError as error:
+            errors.append(str(error))
+    raise ValueError(errors[-1] if errors else "No Audio2Face model path was provided")
+
+
 SCHEMA = "a2f-blendshapes-v1"
 
 # Faceit 2.3.73 reads weightMat by position and uses this internal order, which
@@ -161,8 +197,29 @@ def default_workspace_paths(addon_file):
         "diffusion_model": workspace
         / "Audio2Face-3D-SDK"
         / "_data"
-        / "audio2face-models"
-        / "audio2face-3d-v3.0"
+        / "generated"
+        / "audio2face-sdk"
+        / "samples"
+        / "data"
+        / "multi-diffusion"
+        / "model.json",
+        "generated_regression_model": workspace
+        / "Audio2Face-3D-SDK"
+        / "_data"
+        / "generated"
+        / "audio2face-sdk"
+        / "samples"
+        / "data"
+        / "mark"
+        / "model.json",
+        "generated_diffusion_model": workspace
+        / "Audio2Face-3D-SDK"
+        / "_data"
+        / "generated"
+        / "audio2face-sdk"
+        / "samples"
+        / "data"
+        / "multi-diffusion"
         / "model.json",
         "cuda": workspace / "CUDA" / "v12.9",
         "tensorrt": workspace / "TensorRT" / "TensorRT-10.13.3.9",

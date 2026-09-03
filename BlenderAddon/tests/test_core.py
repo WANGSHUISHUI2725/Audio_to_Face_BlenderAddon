@@ -16,6 +16,7 @@ write_faceit_animation = CORE.write_faceit_animation
 create_json_output_paths = CORE.create_json_output_paths
 detect_model_mode = CORE.detect_model_mode
 resolve_model_mode = CORE.resolve_model_mode
+resolve_runtime_model = CORE.resolve_runtime_model
 
 
 class CoreTests(unittest.TestCase):
@@ -44,6 +45,19 @@ class CoreTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "does not match"):
                 resolve_model_mode(model, "DIFFUSION")
+
+    def test_runtime_model_falls_back_when_download_has_no_tensorrt_network(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            downloaded = root / "downloaded" / "model.json"
+            generated = root / "generated" / "model.json"
+            downloaded.parent.mkdir()
+            generated.parent.mkdir()
+            model_data = json.dumps({"networkPath": "network.trt"})
+            downloaded.write_text(model_data, encoding="utf-8")
+            generated.write_text(model_data, encoding="utf-8")
+            (generated.parent / "network.trt").write_bytes(b"engine")
+            self.assertEqual(resolve_runtime_model(downloaded, generated), generated)
 
     def test_normalize_name(self):
         self.assertEqual(normalize_name("Mouth_Smile.Left"), "mouthsmileleft")

@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Audio2Face Local",
     "author": "WangShuishui",
-    "version": (0, 4, 0),
+    "version": (0, 4, 1),
     "blender": (4, 0, 0),
     "location": "3D View > Sidebar > Audio2Face",
     "description": "Generate local Audio2Face facial animation for Faceit or Shape Keys",
@@ -27,6 +27,7 @@ from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup
 from .core import (
     create_json_output_paths,
     default_workspace_paths,
+    resolve_runtime_model,
     resolve_model_mode,
     load_animation,
     match_channels,
@@ -395,19 +396,24 @@ class A2F_OT_generate(Operator):
         regression_model = Path(bpy.path.abspath(prefs.model_path))
         diffusion_model = Path(bpy.path.abspath(prefs.diffusion_model_path))
         if prefs.model_mode == "DIFFUSION":
-            model = diffusion_model
+            selected_model = diffusion_model
+            generated_model = Path(_defaults()["generated_diffusion_model"])
         elif prefs.model_mode == "REGRESSION":
-            model = regression_model
+            selected_model = regression_model
+            generated_model = Path(_defaults()["generated_regression_model"])
         elif regression_model.is_file():
-            model = regression_model
+            selected_model = regression_model
+            generated_model = Path(_defaults()["generated_regression_model"])
         else:
-            model = diffusion_model
+            selected_model = diffusion_model
+            generated_model = Path(_defaults()["generated_diffusion_model"])
         audio = Path(bpy.path.abspath(settings.audio_path))
-        for label, path in (("Exporter", exporter), ("Model", model), ("Audio", audio)):
+        for label, path in (("Exporter", exporter), ("Audio", audio)):
             if not path.is_file():
                 self.report({"ERROR"}, f"{label} file not found: {path}")
                 return {"CANCELLED"}
         try:
+            model = resolve_runtime_model(selected_model, generated_model)
             model_mode = resolve_model_mode(model, prefs.model_mode)
         except ValueError as error:
             self.report({"ERROR"}, str(error))
