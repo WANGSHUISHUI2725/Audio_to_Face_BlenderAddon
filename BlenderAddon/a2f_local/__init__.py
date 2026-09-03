@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Audio2Face Local",
     "author": "WangShuishui",
-    "version": (0, 4, 1),
+    "version": (0, 5, 0),
     "blender": (4, 0, 0),
     "location": "3D View > Sidebar > Audio2Face",
     "description": "Generate local Audio2Face facial animation for Faceit or Shape Keys",
@@ -121,15 +121,14 @@ class A2FSettings(PropertyGroup):
     audio_path: StringProperty(name="Audio", subtype="FILE_PATH")
     last_json_path: StringProperty(name="Last Faceit JSON", subtype="FILE_PATH")
     last_audio_path: StringProperty(name="Last Imported Audio", subtype="FILE_PATH")
-    delete_previous_audio: BoolProperty(
-        name="Delete Previous Audio",
-        default=False,
-        description="Remove the audio strip imported by the previous generation",
-    )
-    mute_previous_audio: BoolProperty(
-        name="Mute Previous Audio",
-        default=True,
-        description="Mute the audio strip imported by the previous generation",
+    previous_audio_handling: EnumProperty(
+        name="Previous Audio",
+        items=(
+            ("MUTE", "Mute Previous Audio", "Mute the audio strip imported by the previous generation"),
+            ("DELETE", "Delete Previous Audio", "Delete the audio strip imported by the previous generation"),
+        ),
+        default="MUTE",
+        description="Choose one action for the audio strip imported by the previous generation",
     )
     animation_handling: EnumProperty(
         name="Animation",
@@ -177,6 +176,8 @@ class A2FSettings(PropertyGroup):
     strength: FloatProperty(name="Strength", default=1.0, min=0.0, max=3.0)
     frame_step: IntProperty(name="Key Every", default=1, min=1, max=12)
     clamp_values: BoolProperty(name="Clamp 0-1", default=True)
+    generation_in_progress: BoolProperty(name="Generation In Progress", default=False, options={"HIDDEN"})
+    generation_status: StringProperty(name="Generation Status", default="", options={"HIDDEN"})
 
 
 def _preferences(context):
@@ -250,19 +251,32 @@ def _finalize_fcurves(action):
 
 def _handle_previous_audio(context, settings):
     previous = str(getattr(settings, "last_audio_path", "") or "")
-    if not previous:
-        return
     sequence_editor = getattr(context.scene, "sequence_editor", None)
     if sequence_editor is None:
         return
+    def normalized_path(value):
+        return os.path.normcase(os.path.abspath(bpy.path.abspath(str(value))))
+
+    previous_normalized = normalized_path(previous) if previous else None
     for strip in list(getattr(sequence_editor, "sequences_all", ())):
         sound = getattr(strip, "sound", None)
         filepath = getattr(sound, "filepath", "") if sound is not None else ""
-        if filepath != previous and str(getattr(strip, "filepath", "") or "") != previous:
+        candidates = (filepath, str(getattr(strip, "filepath", "") or ""))
+        normalized = {normalized_path(value) for value in candidates if value}
+        # Prefer the exact path recorded by the previous generation. If that
+        # setting is unavailable (e.g. an older scene), fall back to Faceit's
+        # marker so the first run after upgrading can still clean up its strip.
+        matches_previous = previous_normalized is not None and previous_normalized in normalized
+        marked_fallback = previous_normalized is None and getattr(strip, "faceit_audio", False)
+        if not (matches_previous or marked_fallback):
             continue
-        if settings.delete_previous_audio:
-            sequence_editor.sequences.remove(strip)
-        elif settings.mute_previous_audio:
+        if settings.previous_audio_handling == "DELETE":
+            collection = getattr(sequence_editor, "sequences", None)
+            if collection is None:
+                collection = getattr(sequence_editor, "strips", None)
+            if collection is not None:
+                collection.remove(strip)
+        elif settings.previous_audio_handling == "MUTE":
             strip.mute = True
 
 
@@ -366,15 +380,27 @@ def _apply_with_faceit(context, faceit_json_path, audio_path):
     engine_settings.filename = str(faceit_json_path)
     engine_settings.audio_filename = str(audio_path)
     action_name = f"A2F_{audio_path.stem}"
+    rig_animation_data = getattr(rig, "animation_data", None)
+    if settings.animation_handling == "NEW" and hasattr(context.scene, "faceit_mocap_action"):
+        context.scene.faceit_mocap_action = None
+    if settings.animation_handling == "NEW" and rig_animation_data is not None:
+        # Faceit reuses the control-rig action whenever one is active. Clear it
+        # so its bake step creates a genuinely new action and action slot.
+        rig_animation_data.action = None
     result = _run_faceit_import(
         a2f_solver="ARKIT",
         frame_start=settings.start_frame,
         record_frame_rate=60.0,
         animate_shapes=True,
         bake_to_control_rig=settings.bake_to_control_rig,
-        overwrite_method="REPLACE" if settings.animation_handling == "REPLACE" else "MIX",
+        overwrite_method="REPLACE",
         set_scene_frame_range=True,
         load_audio_file=True,
+        # Faceit uses this value as the sound-strip name. Its invoke() method
+        # normally fills it in, but this addon intentionally executes the
+        # operator directly after showing its own confirmation dialog.
+        audio_filename=audio_path.name,
+        remove_audio_tracks_with_same_name=False,
         new_action_name=action_name,
     )
     if "FINISHED" not in result:
@@ -432,11 +458,33 @@ class A2F_OT_generate(Operator):
     _output_path = None
     _faceit_output_path = None
     _audio_path = None
+    confirmation_handling: EnumProperty(
+        name="Animation Result",
+        items=(
+            ("REPLACE", "Overwrite Animation and Slot", "Replace the current facial animation and slot"),
+            ("NEW", "New Animation and Slot", "Create a new facial animation and slot"),
+        ),
+        default="REPLACE",
+        options={"SKIP_SAVE"},
+    )
+
+    def invoke(self, context, event):
+        settings = context.scene.a2f_local
+        self.confirmation_handling = settings.animation_handling
+        if settings.generation_mode == "ANIMATION":
+            return context.window_manager.invoke_props_dialog(self, width=420)
+        return self.execute(context)
+
+    def draw(self, context):
+        settings = context.scene.a2f_local
+        if settings.generation_mode == "ANIMATION":
+            self.layout.label(text="Choose how to handle the current facial animation:")
+            self.layout.prop(self, "confirmation_handling", expand=True)
 
     @classmethod
     def poll(cls, context):
         settings = getattr(context.scene, "a2f_local", None)
-        return settings is not None and bool(settings.audio_path) and (
+        return settings is not None and not settings.generation_in_progress and bool(settings.audio_path) and (
             settings.generation_mode == "JSON"
             or settings.output_mode == "FACEIT"
             or settings.target is not None
@@ -444,6 +492,8 @@ class A2F_OT_generate(Operator):
 
     def execute(self, context):
         settings = context.scene.a2f_local
+        if settings.generation_mode == "ANIMATION":
+            settings.animation_handling = self.confirmation_handling
         prefs = _preferences(context)
         if prefs is None:
             self.report({"ERROR"}, "Audio2Face preferences are unavailable")
@@ -465,11 +515,11 @@ class A2F_OT_generate(Operator):
             selected_model = diffusion_model
             generated_model = Path(_defaults()["generated_diffusion_model"])
         audio = Path(bpy.path.abspath(settings.audio_path))
-        _handle_previous_audio(context, settings)
         for label, path in (("Exporter", exporter), ("Audio", audio)):
             if not path.is_file():
                 self.report({"ERROR"}, f"{label} file not found: {path}")
                 return {"CANCELLED"}
+        _handle_previous_audio(context, settings)
         try:
             model = resolve_runtime_model(selected_model, generated_model)
             model_mode = resolve_model_mode(model, prefs.model_mode)
@@ -532,9 +582,17 @@ class A2F_OT_generate(Operator):
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except OSError as error:
+            settings.generation_in_progress = False
+            settings.generation_status = ""
             self.report({"ERROR"}, f"Could not start exporter: {error}")
             return {"CANCELLED"}
 
+        settings.generation_in_progress = True
+        settings.generation_status = (
+            "New animation is generating..."
+            if settings.animation_handling == "NEW"
+            else "Animation overwrite is generating..."
+        )
         self._timer = context.window_manager.event_timer_add(0.25, window=context.window)
         context.window_manager.modal_handler_add(self)
         context.window.cursor_set("WAIT")
@@ -545,6 +603,9 @@ class A2F_OT_generate(Operator):
             self._finish(context)
             if self._process and self._process.poll() is None:
                 self._process.terminate()
+            settings = context.scene.a2f_local
+            settings.generation_in_progress = False
+            settings.generation_status = ""
             self.report({"WARNING"}, "Audio2Face generation cancelled")
             return {"CANCELLED"}
         if event.type != "TIMER" or self._process.poll() is None:
@@ -555,6 +616,9 @@ class A2F_OT_generate(Operator):
         self._finish(context)
         if return_code != 0:
             message = (stderr or stdout or "Exporter failed").strip().splitlines()[-1]
+            settings = context.scene.a2f_local
+            settings.generation_in_progress = False
+            settings.generation_status = ""
             self.report({"ERROR"}, message[:900])
             return {"CANCELLED"}
         try:
@@ -562,6 +626,8 @@ class A2F_OT_generate(Operator):
             settings = context.scene.a2f_local
             settings.last_json_path = str(self._faceit_output_path)
             if settings.generation_mode == "JSON":
+                settings.generation_in_progress = False
+                settings.generation_status = ""
                 self.report({"INFO"}, f"Faceit JSON created: {self._faceit_output_path}")
                 return {"FINISHED"}
             if settings.output_mode == "FACEIT":
@@ -572,8 +638,13 @@ class A2F_OT_generate(Operator):
                 channel_count, frame_count, action_name = _apply_animation(context, self._output_path)
             settings.last_audio_path = str(self._audio_path)
         except Exception as error:
+            settings = context.scene.a2f_local
+            settings.generation_in_progress = False
+            settings.generation_status = ""
             self.report({"ERROR"}, f"Could not apply animation: {error}")
             return {"CANCELLED"}
+        settings.generation_in_progress = False
+        settings.generation_status = ""
         self.report(
             {"INFO"},
             f"Applied {frame_count} source frames across {channel_count} facial channels ({action_name})",
@@ -590,6 +661,9 @@ class A2F_OT_generate(Operator):
         self._finish(context)
         if self._process and self._process.poll() is None:
             self._process.terminate()
+        settings = context.scene.a2f_local
+        settings.generation_in_progress = False
+        settings.generation_status = ""
 
 
 class A2F_PT_panel(Panel):
@@ -604,15 +678,13 @@ class A2F_PT_panel(Panel):
         settings = context.scene.a2f_local
         prefs = _preferences(context)
         layout.prop(settings, "audio_path")
-        layout.prop(settings, "delete_previous_audio")
-        layout.prop(settings, "mute_previous_audio")
+        layout.prop(settings, "previous_audio_handling", expand=True)
         if prefs is not None:
             layout.prop(prefs, "model_mode", expand=True)
             if prefs.model_mode != "REGRESSION":
                 layout.prop(prefs, "diffusion_identity", expand=True)
         layout.prop(settings, "generation_mode", expand=True)
         if settings.generation_mode == "ANIMATION":
-            layout.prop(settings, "animation_handling", expand=True)
             layout.prop(settings, "output_mode", expand=True)
             if settings.output_mode == "FACEIT":
                 layout.prop(settings, "faceit_control_rig")
@@ -637,7 +709,13 @@ class A2F_PT_panel(Panel):
             layout.prop(settings, "clamp_values")
         button_icon = "PLAY" if settings.generation_mode == "ANIMATION" else "FILE_TICK"
         button_text = "Generate Animation" if settings.generation_mode == "ANIMATION" else "Generate Faceit JSON"
-        layout.operator("a2f.generate_animation", text=button_text, icon=button_icon)
+        if settings.generation_in_progress:
+            layout.label(text=settings.generation_status or "Animation is generating...", icon="TIME")
+            row = layout.row()
+            row.enabled = False
+            row.operator("a2f.generate_animation", text="Generating...", icon="TIME")
+        else:
+            layout.operator("a2f.generate_animation", text=button_text, icon=button_icon)
         if settings.last_json_path:
             layout.prop(settings, "last_json_path", text="Last JSON")
         layout.operator("a2f.open_json_folder", icon="FILE_FOLDER")
