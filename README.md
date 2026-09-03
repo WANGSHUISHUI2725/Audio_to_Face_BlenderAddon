@@ -91,6 +91,10 @@ publish a tested GPU matrix as more hardware is verified.
 
 ## License
 
-Project code is released under the MIT License. NVIDIA Audio2Face SDK, model, CUDA, and
-TensorRT components remain subject to their respective licenses. See
+Project code is released under the **GNU General Public License v3.0 or later
+(GPL-3.0-or-later)**. See the [official GPLv3 text](https://www.gnu.org/licenses/gpl-3.0.html)
+for the license terms.
+
+NVIDIA Audio2Face SDK, model, CUDA, TensorRT, and other third-party components remain
+subject to their respective licenses and are not relicensed by this project. See
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
