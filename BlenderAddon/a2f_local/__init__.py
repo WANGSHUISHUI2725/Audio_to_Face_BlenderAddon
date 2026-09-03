@@ -372,7 +372,7 @@ def _apply_with_faceit(context, faceit_json_path, audio_path):
         record_frame_rate=60.0,
         animate_shapes=True,
         bake_to_control_rig=settings.bake_to_control_rig,
-        overwrite_method="REPLACE" if settings.animation_handling == "REPLACE" else "ADD",
+        overwrite_method="REPLACE" if settings.animation_handling == "REPLACE" else "MIX",
         set_scene_frame_range=True,
         load_audio_file=True,
         new_action_name=action_name,
