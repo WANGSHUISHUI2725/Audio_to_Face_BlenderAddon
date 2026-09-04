@@ -18,6 +18,9 @@ For v3.0, the selected Faceit identity and `c_lips_closed` limit are applied aft
 the default limit is 0.5 to reduce lip interpenetration. Under the audio field, enable
 either deletion or muting of the previous imported audio strip. For direct Shape Key
 animation, choose whether to overwrite the current action or create a new facial action.
+In direct Shape Key mode, select all character mesh parts and click **Add Selected Models**.
+The registered head, mouth, teeth, tongue, eyes, and other parts share one generated Action
+and one Shape Key slot containing all matched animation curves.
 
 ## Use
 
@@ -48,3 +51,11 @@ Faceit maps 3600 source samples to about 1800 Blender timeline frames in a 30 FP
 
 Shape Key matching ignores case and separators, so names such as `jawOpen`, `jaw_open`,
 and `Jaw.Open` match the same channel.
+
+## Version 0.6.0
+
+- Fixed direct Shape Key animation producing unbound Legacy Slot curves in Blender 4.5+.
+- Added registration of multiple mesh parts for direct Shape Key animation.
+- All registered parts share one Action and one `KEY` slot containing the combined curves.
+- Added validation for missing Shape Keys, duplicate registrations, and unmatched channels.
+- Added Blender 4.5 and Blender 5.2 regression coverage for new and overwrite workflows.

@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Audio2Face Local",
     "author": "WangShuishui",
-    "version": (0, 5, 0),
+    "version": (0, 6, 0),
     "blender": (4, 0, 0),
     "location": "3D View > Sidebar > Audio2Face",
     "description": "Generate local Audio2Face facial animation for Faceit or Shape Keys",
@@ -16,13 +16,14 @@ from pathlib import Path
 import bpy
 from bpy.props import (
     BoolProperty,
+    CollectionProperty,
     EnumProperty,
     FloatProperty,
     IntProperty,
     PointerProperty,
     StringProperty,
 )
-from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup
+from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup, UIList
 
 from .core import (
     create_json_output_paths,
@@ -42,6 +43,10 @@ def _defaults():
 
 def _armature_poll(_self, obj):
     return obj is not None and obj.type == "ARMATURE"
+
+
+def _mesh_poll(_self, obj):
+    return obj is not None and obj.type == "MESH"
 
 
 class A2FPreferences(AddonPreferences):
@@ -117,6 +122,10 @@ class A2FPreferences(AddonPreferences):
         layout.prop(self, "json_output_path")
 
 
+class A2FTargetObject(PropertyGroup):
+    object: PointerProperty(name="Model Part", type=bpy.types.Object, poll=_mesh_poll)
+
+
 class A2FSettings(PropertyGroup):
     audio_path: StringProperty(name="Audio", subtype="FILE_PATH")
     last_json_path: StringProperty(name="Last Faceit JSON", subtype="FILE_PATH")
@@ -155,6 +164,8 @@ class A2FSettings(PropertyGroup):
         default="FACEIT",
     )
     target: PointerProperty(name="Face Mesh", type=bpy.types.Object)
+    direct_targets: CollectionProperty(type=A2FTargetObject)
+    direct_target_index: IntProperty(default=0, min=0)
     faceit_control_rig: PointerProperty(
         name="Faceit Control Rig",
         type=bpy.types.Object,
@@ -188,6 +199,20 @@ def _preferences(context):
 def _shape_keys(target):
     data = getattr(target, "data", None)
     return getattr(data, "shape_keys", None)
+
+
+def _direct_targets(settings):
+    targets = []
+    seen = set()
+    for item in settings.direct_targets:
+        target = item.object
+        if target is not None and target.type == "MESH" and target.as_pointer() not in seen:
+            seen.add(target.as_pointer())
+            targets.append(target)
+    # Keep files made with the single-target preview usable until an object is registered.
+    if not targets and settings.target is not None and settings.target.type == "MESH":
+        targets.append(settings.target)
+    return targets
 
 
 def _is_faceit_control_rig(obj):
@@ -307,61 +332,158 @@ def _run_faceit_import(**properties):
         operator_class.execute = original_execute
 
 
+def _shape_key_fcurves(shape_keys, action, replace_existing, existing_slot=None):
+    """Bind layered Action curves to the Shape Key datablock on Blender 4.4+."""
+    animation_data = shape_keys.animation_data
+    if not hasattr(action, "slots") or not hasattr(animation_data, "action_slot"):
+        if replace_existing:
+            action.fcurves.clear()
+        return action.fcurves
+
+    slot = existing_slot if replace_existing else None
+    if slot is None or slot.id_data != action:
+        # An empty legacy Action can be converted to a layered Action after its
+        # unbound legacy curves have been removed.
+        if replace_existing and getattr(action, "is_action_legacy", False):
+            action.fcurves.clear()
+        slot = action.slots.new("KEY", shape_keys.name)
+
+    animation_data.action_slot = slot
+    channelbag = None
+    for layer in action.layers:
+        for strip in layer.strips:
+            if strip.type == "KEYFRAME":
+                channelbag = strip.channelbag(slot)
+                if channelbag is not None:
+                    break
+        if channelbag is not None:
+            break
+
+    if channelbag is None:
+        layer = action.layers[0] if action.layers else action.layers.new("Audio2Face")
+        strip = next(
+            (candidate for candidate in layer.strips if candidate.type == "KEYFRAME"),
+            None,
+        )
+        if strip is None:
+            strip = layer.strips.new(type="KEYFRAME")
+        channelbag = strip.channelbag(slot, ensure=True)
+    elif replace_existing:
+        channelbag.fcurves.clear()
+
+    return channelbag.fcurves
+
+
 def _apply_animation(context, json_path):
     settings = context.scene.a2f_local
-    target = settings.target
-    shape_keys = _shape_keys(target)
-    if shape_keys is None:
-        raise ValueError("Selected mesh has no Shape Keys")
-
     animation = load_animation(json_path)
-    mapping = match_channels(animation["channels"], shape_keys.key_blocks.keys())
-    if not mapping:
-        raise ValueError("No Audio2Face channels match this mesh's Shape Keys")
+    targets = _direct_targets(settings)
+    if not targets:
+        raise ValueError("No mesh objects are registered for Shape Key animation")
 
-    shape_keys.animation_data_create()
+    target_data = []
+    seen_shape_keys = set()
+    for target in targets:
+        shape_keys = _shape_keys(target)
+        if shape_keys is None:
+            raise ValueError(f'Registered model "{target.name}" has no Shape Keys')
+        pointer = shape_keys.as_pointer()
+        if pointer in seen_shape_keys:
+            continue
+        seen_shape_keys.add(pointer)
+        mapping = match_channels(animation["channels"], shape_keys.key_blocks.keys())
+        if mapping:
+            target_data.append((target, shape_keys, mapping))
+    if not target_data:
+        raise ValueError("No Audio2Face channels match the registered models' Shape Keys")
+
+    for _target, shape_keys, _mapping in target_data:
+        shape_keys.animation_data_create()
     action_name = f"A2F_{Path(animation.get('source', 'Audio')).stem}"
-    if settings.animation_handling == "REPLACE" and shape_keys.animation_data.action is not None:
-        action = shape_keys.animation_data.action
+    replace_requested = settings.animation_handling == "REPLACE"
+    action = next(
+        (
+            shape_keys.animation_data.action
+            for _target, shape_keys, _mapping in target_data
+            if replace_requested and shape_keys.animation_data.action is not None
+        ),
+        None,
+    )
+    if action is not None:
         action.name = action_name
-        action.fcurves.clear()
     else:
         action = bpy.data.actions.new(action_name)
-    shape_keys.animation_data.action = action
 
     scene_fps = context.scene.render.fps / context.scene.render.fps_base
     source_fps = float(animation["fps"])
     source_indices = {name: index for index, name in enumerate(animation["channels"])}
-    channel_frames = {target_name: [] for target_name in mapping.values()}
 
-    for index, frame in enumerate(animation["frames"]):
-        if index % settings.frame_step != 0 and index + 1 != len(animation["frames"]):
-            continue
-        timeline_frame = settings.start_frame + index * scene_fps / source_fps
-        for source_name, target_name in mapping.items():
-            value = float(frame["w"][source_indices[source_name]]) * settings.strength
-            if settings.clamp_values:
-                value = min(1.0, max(0.0, value))
-            channel_frames[target_name].append((timeline_frame, value))
+    def write_curves(fcurves, mapping_items):
+        channel_frames = {target_name: [] for _source_name, target_name in mapping_items}
+        for index, frame in enumerate(animation["frames"]):
+            if index % settings.frame_step != 0 and index + 1 != len(animation["frames"]):
+                continue
+            timeline_frame = settings.start_frame + index * scene_fps / source_fps
+            for source_name, target_name in mapping_items:
+                value = float(frame["w"][source_indices[source_name]]) * settings.strength
+                if settings.clamp_values:
+                    value = min(1.0, max(0.0, value))
+                channel_frames[target_name].append((timeline_frame, value))
 
-    for target_name, points in channel_frames.items():
-        escaped_name = target_name.replace("\\", "\\\\").replace('"', '\\"')
-        curve = action.fcurves.new(
-            data_path=f'key_blocks["{escaped_name}"].value',
-            index=0,
-            action_group="Audio2Face",
+        for target_name, points in channel_frames.items():
+            escaped_name = target_name.replace("\\", "\\\\").replace('"', '\\"')
+            curve = fcurves.new(
+                data_path=f'key_blocks["{escaped_name}"].value',
+                index=0,
+            )
+            curve.keyframe_points.add(len(points))
+            coordinates = [coordinate for point in points for coordinate in point]
+            curve.keyframe_points.foreach_set("co", coordinates)
+            for keyframe in curve.keyframe_points:
+                keyframe.interpolation = "LINEAR"
+            curve.update()
+
+    layered_action = hasattr(action, "slots")
+    mapping_items = list(
+        dict.fromkeys(
+            pair
+            for _target, _shape_keys, mapping in target_data
+            for pair in mapping.items()
         )
-        curve.keyframe_points.add(len(points))
-        coordinates = [coordinate for point in points for coordinate in point]
-        curve.keyframe_points.foreach_set("co", coordinates)
-        for keyframe in curve.keyframe_points:
-            keyframe.interpolation = "LINEAR"
-        curve.update()
+    )
+    if layered_action:
+        shared_slot = next(
+            (
+                shape_keys.animation_data.action_slot
+                for _target, shape_keys, _mapping in target_data
+                if shape_keys.animation_data.action == action
+                and shape_keys.animation_data.action_slot is not None
+            ),
+            None,
+        )
+        primary_shape_keys = target_data[0][1]
+        primary_shape_keys.animation_data.action = action
+        replace_slot = replace_requested and shared_slot is not None
+        fcurves = _shape_key_fcurves(
+            primary_shape_keys, action, replace_slot, existing_slot=shared_slot
+        )
+        shared_slot = primary_shape_keys.animation_data.action_slot
+        for _target, shape_keys, _mapping in target_data:
+            shape_keys.animation_data.action = action
+            shape_keys.animation_data.action_slot = shared_slot
+        write_curves(fcurves, mapping_items)
+    else:
+        if replace_requested:
+            action.fcurves.clear()
+        for _target, shape_keys, mapping in target_data:
+            shape_keys.animation_data.action = action
+        write_curves(action.fcurves, mapping_items)
 
     context.scene.frame_start = min(context.scene.frame_start, settings.start_frame)
     last_frame = settings.start_frame + (len(animation["frames"]) - 1) * scene_fps / source_fps
     context.scene.frame_end = max(context.scene.frame_end, int(round(last_frame)))
-    return len(mapping), len(animation["frames"]), action.name
+    matched_channels = sum(len(mapping) for _target, _shape_keys, mapping in target_data)
+    return matched_channels, len(animation["frames"]), action.name
 
 
 def _apply_with_faceit(context, faceit_json_path, audio_path):
@@ -447,6 +569,84 @@ class A2F_OT_open_json_folder(Operator):
         return {"FINISHED"}
 
 
+class A2F_UL_direct_targets(UIList):
+    def draw_item(
+        self, _context, layout, _data, item, _icon, _active_data, _active_propname, _index
+    ):
+        target = item.object
+        icon = "MESH_DATA" if target is not None else "ERROR"
+        layout.prop(item, "object", text="", emboss=False, icon=icon)
+
+
+class A2F_OT_add_direct_targets(Operator):
+    bl_idname = "a2f.add_direct_targets"
+    bl_label = "Add Selected Models"
+    bl_description = "Register all selected mesh objects for direct Shape Key animation"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        settings = context.scene.a2f_local
+        registered = {
+            item.object.as_pointer()
+            for item in settings.direct_targets
+            if item.object is not None
+        }
+        selected_meshes = [obj for obj in context.selected_objects if obj.type == "MESH"]
+        added = 0
+        for obj in selected_meshes:
+            if obj.as_pointer() in registered:
+                continue
+            item = settings.direct_targets.add()
+            item.object = obj
+            registered.add(obj.as_pointer())
+            added += 1
+        if not selected_meshes:
+            self.report({"WARNING"}, "Select one or more mesh objects first")
+            return {"CANCELLED"}
+        if added == 0:
+            self.report({"INFO"}, "All selected mesh objects are already registered")
+        else:
+            settings.direct_target_index = len(settings.direct_targets) - 1
+            self.report({"INFO"}, f"Registered {added} model part(s)")
+        return {"FINISHED"}
+
+
+class A2F_OT_remove_direct_target(Operator):
+    bl_idname = "a2f.remove_direct_target"
+    bl_label = "Remove Model"
+    bl_description = "Remove the active model part from the direct animation list"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        settings = getattr(context.scene, "a2f_local", None)
+        return settings is not None and bool(settings.direct_targets)
+
+    def execute(self, context):
+        settings = context.scene.a2f_local
+        index = min(settings.direct_target_index, len(settings.direct_targets) - 1)
+        settings.direct_targets.remove(index)
+        settings.direct_target_index = min(index, max(0, len(settings.direct_targets) - 1))
+        return {"FINISHED"}
+
+
+class A2F_OT_clear_direct_targets(Operator):
+    bl_idname = "a2f.clear_direct_targets"
+    bl_label = "Clear Models"
+    bl_description = "Remove all model parts from the direct animation list"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        settings = getattr(context.scene, "a2f_local", None)
+        return settings is not None and bool(settings.direct_targets)
+
+    def execute(self, context):
+        context.scene.a2f_local.direct_targets.clear()
+        context.scene.a2f_local.direct_target_index = 0
+        return {"FINISHED"}
+
+
 class A2F_OT_generate(Operator):
     bl_idname = "a2f.generate_animation"
     bl_label = "Generate Facial Animation"
@@ -487,7 +687,7 @@ class A2F_OT_generate(Operator):
         return settings is not None and not settings.generation_in_progress and bool(settings.audio_path) and (
             settings.generation_mode == "JSON"
             or settings.output_mode == "FACEIT"
-            or settings.target is not None
+            or bool(_direct_targets(settings))
         )
 
     def execute(self, context):
@@ -529,9 +729,18 @@ class A2F_OT_generate(Operator):
         if (
             settings.generation_mode == "ANIMATION"
             and settings.output_mode == "DIRECT"
-            and _shape_keys(settings.target) is None
+            and not _direct_targets(settings)
         ):
-            self.report({"ERROR"}, "Face mesh must have Shape Keys")
+            self.report({"ERROR"}, "Register at least one mesh object")
+            return {"CANCELLED"}
+        missing_shape_keys = [
+            target.name for target in _direct_targets(settings) if _shape_keys(target) is None
+        ]
+        if settings.generation_mode == "ANIMATION" and settings.output_mode == "DIRECT" and missing_shape_keys:
+            self.report(
+                {"ERROR"},
+                "Registered models without Shape Keys: " + ", ".join(missing_shape_keys),
+            )
             return {"CANCELLED"}
         if settings.generation_mode == "ANIMATION" and settings.output_mode == "FACEIT":
             try:
@@ -697,7 +906,23 @@ class A2F_PT_panel(Panel):
                     layout.label(text=f"{rig.name}: {'Connected' if connected else 'Not connected'}", icon=icon)
                 layout.prop(settings, "bake_to_control_rig")
             else:
-                layout.prop(settings, "target")
+                layout.label(text="Registered Model Parts")
+                row = layout.row()
+                row.template_list(
+                    "A2F_UL_direct_targets",
+                    "",
+                    settings,
+                    "direct_targets",
+                    settings,
+                    "direct_target_index",
+                    rows=3,
+                )
+                controls = row.column(align=True)
+                controls.operator("a2f.add_direct_targets", text="", icon="ADD")
+                controls.operator("a2f.remove_direct_target", text="", icon="REMOVE")
+                controls.separator()
+                controls.operator("a2f.clear_direct_targets", text="", icon="TRASH")
+                layout.operator("a2f.add_direct_targets", icon="RESTRICT_SELECT_OFF")
         if settings.generation_mode == "ANIMATION":
             row = layout.row(align=True)
             row.prop(settings, "start_frame")
@@ -723,9 +948,14 @@ class A2F_PT_panel(Panel):
 
 CLASSES = (
     A2FPreferences,
+    A2FTargetObject,
     A2FSettings,
     A2F_OT_detect_faceit_rig,
     A2F_OT_open_json_folder,
+    A2F_UL_direct_targets,
+    A2F_OT_add_direct_targets,
+    A2F_OT_remove_direct_target,
+    A2F_OT_clear_direct_targets,
     A2F_OT_generate,
     A2F_PT_panel,
 )

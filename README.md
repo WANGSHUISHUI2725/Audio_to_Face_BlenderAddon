@@ -3,6 +3,18 @@
 This repository contains a Blender add-on and a native exporter that use the NVIDIA
 Audio2Face 3D SDK to generate ARKit-compatible facial animation from audio.
 
+## Version 0.6.0
+
+Version 0.6.0 fixes direct Shape Key animation on Blender 4.5 and newer. Generated curves
+are now bound to a `KEY` Action Slot instead of an unassigned Legacy Slot, so unrigged mesh
+Shape Keys are evaluated correctly on the timeline.
+
+Direct Shape Key mode now supports registering multiple character mesh parts, including the
+head, mouth, teeth, tongue, eyeballs, and irises. All registered parts share one generated
+Action and one Shape Key slot containing the combined animation curves. The release also
+adds duplicate-registration protection, model validation, and Blender 4.5/5.2 regression
+tests for both new-animation and overwrite workflows.
+
 ## Contents
 
 - `BlenderAddon/`: Blender add-on source, tests, and packaging script.
@@ -73,14 +85,6 @@ publish a tested GPU matrix as more hardware is verified.
 3. **Missing TensorRT files**: The add-on preferences should provide a validation button that
    checks whether referenced files such as `network.trt` exist. We also need to investigate
    whether users without a development environment can generate the TensorRT engine locally.
-4. **Direct animation generation overwrites the previous animation**: Generating animation
-   directly currently replaces the previous result. The planned UI change is to offer
-   explicit **Keep** and **Overwrite** choices, allowing users to preserve the existing
-   animation or create a new animation instead.
-5. **Audio accumulates after repeated imports**: Importing animation also imports its audio
-   file. A second import currently leaves the first audio strip in place, so playback can
-   play multiple audio files at the same time. The planned fix is to automatically mute the
-   track containing the previously imported audio when a new import is performed.
 
 ## Development roadmap
 
